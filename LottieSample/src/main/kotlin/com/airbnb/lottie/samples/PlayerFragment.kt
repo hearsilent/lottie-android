@@ -43,6 +43,7 @@ import kotlinx.android.synthetic.main.control_bar_speed.*
 import kotlinx.android.synthetic.main.control_bar_trim.*
 import kotlinx.android.synthetic.main.fragment_player.*
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.properties.ObservableProperty
 import kotlin.reflect.KProperty
 
@@ -63,6 +64,7 @@ private class UiState(private val callback: () -> Unit) {
     var speed by BooleanProperty(false)
     var trim by BooleanProperty(false)
 }
+
 class PlayerFragment : Fragment() {
 
     private val transition = AutoTransition().apply { duration = 175 }
@@ -134,6 +136,7 @@ class PlayerFragment : Fragment() {
         args.animationData?.bgColorInt()?.let {
             backgroundButton1.setBackgroundColor(it)
             animationContainer.setBackgroundColor(it)
+            invertColor(it)
         }
 
         viewModel.composition.observe(this, Observer {
@@ -155,7 +158,7 @@ class PlayerFragment : Fragment() {
         closeBackgroundColorButton.setOnClickListener { uiState.backgroundColor = false }
         closeScaleButton.setOnClickListener { uiState.scale = false }
         closeSpeedButton.setOnClickListener { uiState.speed = false }
-        closeTrimButton.setOnClickListener{ uiState.trim = false }
+        closeTrimButton.setOnClickListener { uiState.trim = false }
 
         hardwareAccelerationToggle.setOnClickListener {
             animationView.useHardwareAcceleration(!animationView.useHardwareAcceleration)
@@ -169,8 +172,7 @@ class PlayerFragment : Fragment() {
 
         seekBar.setOnSeekBarChangeListener(OnSeekBarChangeListenerAdapter(
                 onProgressChanged = { _, progress, _ ->
-                    if (!seekBar.isPressed) return@OnSeekBarChangeListenerAdapter
-                    if (progress in 1..4) {
+                    if (seekBar.isPressed && progress in 1..4) {
                         seekBar.progress = 0
                         return@OnSeekBarChangeListenerAdapter
                     }
@@ -183,7 +185,7 @@ class PlayerFragment : Fragment() {
         animationView.addAnimatorUpdateListener {
             currentFrameView.text = animationView.frame.toString()
             if (seekBar.isPressed) return@addAnimatorUpdateListener
-            seekBar.progress = ((it.animatedValue as Float) * seekBar.max).toInt()
+            seekBar.progress = ((it.animatedValue as Float) * seekBar.max).roundToInt()
         }
         animationView.addAnimatorListener(animatorListener)
         playButton.setOnClickListener {
@@ -250,7 +252,10 @@ class PlayerFragment : Fragment() {
                 backgroundButton5,
                 backgroundButton6
         ).forEach { bb ->
-            bb.setOnClickListener { animationContainer.setBackgroundColor(bb.getColor()) }
+            bb.setOnClickListener {
+                animationContainer.setBackgroundColor(bb.getColor())
+                invertColor(bb.getColor())
+            }
         }
 
         renderTimesGraph.apply {
@@ -335,6 +340,17 @@ class PlayerFragment : Fragment() {
         updateUiFromState()
     }
 
+    private fun invertColor(color: Int) {
+        val isDarkBg = color.isDark()
+        animationView.isActivated = isDarkBg
+        toolbar.isActivated = isDarkBg
+    }
+
+    private fun Int.isDark(): Boolean {
+        val y = (299 * Color.red(this) + 587 * Color.green(this) + 114 * Color.blue(this)) / 1000
+        return y < 128
+    }
+
     override fun onDestroyView() {
         animationView.removeAnimatorListener(animatorListener)
         super.onDestroyView()
@@ -360,7 +376,7 @@ class PlayerFragment : Fragment() {
                 uiState.speed = false
                 uiState.trim = false
                 updateUiFromState()
-                val menuIcon = if (item.isChecked) R.drawable.ic_eye_teal else R.drawable.ic_eye_black
+                val menuIcon = if (item.isChecked) R.drawable.ic_eye_teal else R.drawable.ic_eye_selector
                 item.icon = ContextCompat.getDrawable(requireContext(), menuIcon)
             }
         }

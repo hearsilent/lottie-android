@@ -1,11 +1,13 @@
 package com.airbnb.lottie.utils;
 
 import android.animation.ValueAnimator;
-import android.support.annotation.FloatRange;
-import android.support.annotation.Nullable;
-import android.support.annotation.VisibleForTesting;
+import androidx.annotation.FloatRange;
+import androidx.annotation.MainThread;
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import android.view.Choreographer;
 
+import com.airbnb.lottie.L;
 import com.airbnb.lottie.LottieComposition;
 
 /**
@@ -23,7 +25,7 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
   private float minFrame = Integer.MIN_VALUE;
   private float maxFrame = Integer.MAX_VALUE;
   @Nullable private LottieComposition composition;
-  @VisibleForTesting protected boolean isRunning = false;
+  @VisibleForTesting protected boolean running = false;
 
   public LottieValueAnimator() {
   }
@@ -72,7 +74,7 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
   }
 
   @Override public boolean isRunning() {
-    return isRunning;
+    return running;
   }
 
   @Override public void doFrame(long frameTimeNanos) {
@@ -81,8 +83,9 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
       return;
     }
 
-    long now = System.nanoTime();
-    long timeSinceFrame = now - lastFrameTimeNs;
+    L.beginSection("LottieValueAnimator#doFrame");
+    long now = frameTimeNanos;
+    long timeSinceFrame = lastFrameTimeNs == 0 ? 0 : now - lastFrameTimeNs;
     float frameDuration = getFrameDurationNs();
     float dFrames = timeSinceFrame / frameDuration;
 
@@ -95,7 +98,7 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
     notifyUpdate();
     if (ended) {
       if (getRepeatCount() != INFINITE && repeatCount >= getRepeatCount()) {
-        frame = getMaxFrame();
+        frame = speed < 0 ? getMinFrame() : getMaxFrame();
         removeFrameCallback();
         notifyEnd(isReversed());
       } else {
@@ -112,6 +115,7 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
     }
 
     verifyFrame();
+    L.endSection("LottieValueAnimator#doFrame");
   }
 
   private float getFrameDurationNs() {
@@ -140,16 +144,17 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
     } else {
       setMinAndMaxFrames((int) composition.getStartFrame(), (int) composition.getEndFrame());
     }
+    float frame = this.frame;
+    this.frame = 0f;
     setFrame((int) frame);
-    lastFrameTimeNs = System.nanoTime();
   }
 
-  public void setFrame(int frame) {
+  public void setFrame(float frame) {
     if (this.frame == frame) {
       return;
     }
     this.frame = MiscUtils.clamp(frame, getMinFrame(), getMaxFrame());
-    lastFrameTimeNs = System.nanoTime();
+    lastFrameTimeNs = 0;
     notifyUpdate();
   }
 
@@ -157,12 +162,15 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
     setMinAndMaxFrames(minFrame, (int) maxFrame);
   }
 
-  public void setMaxFrame(int maxFrame) {
-    setMinAndMaxFrames((int) minFrame, maxFrame);
+  public void setMaxFrame(float maxFrame) {
+    setMinAndMaxFrames(minFrame, maxFrame);
   }
 
-  public void setMinAndMaxFrames(int minFrame, int maxFrame) {
-    float compositionMinFrame = composition == null ? Float.MIN_VALUE : composition.getStartFrame();
+  public void setMinAndMaxFrames(float minFrame, float maxFrame) {
+    if (minFrame > maxFrame) {
+      throw new IllegalArgumentException(String.format("minFrame (%s) must be <= maxFrame (%s)", minFrame, maxFrame));
+    }
+    float compositionMinFrame = composition == null ? -Float.MAX_VALUE : composition.getStartFrame();
     float compositionMaxFrame = composition == null ? Float.MAX_VALUE : composition.getEndFrame();
     this.minFrame = MiscUtils.clamp(minFrame, compositionMinFrame, compositionMaxFrame);
     this.maxFrame = MiscUtils.clamp(maxFrame, compositionMinFrame, compositionMaxFrame);
@@ -192,26 +200,32 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
     }
   }
 
+  @MainThread
   public void playAnimation() {
+    running = true;
     notifyStart(isReversed());
     setFrame((int) (isReversed() ? getMaxFrame() : getMinFrame()));
-    lastFrameTimeNs = System.nanoTime();
+    lastFrameTimeNs = 0;
     repeatCount = 0;
     postFrameCallback();
   }
 
+  @MainThread
   public void endAnimation() {
     removeFrameCallback();
     notifyEnd(isReversed());
   }
 
+  @MainThread
   public void pauseAnimation() {
     removeFrameCallback();
   }
 
+  @MainThread
   public void resumeAnimation() {
+    running = true;
     postFrameCallback();
-    lastFrameTimeNs = System.nanoTime();
+    lastFrameTimeNs = 0;
     if (isReversed() && getFrame() == getMinFrame()) {
       frame = getMaxFrame();
     } else if (!isReversed() && getFrame() == getMaxFrame()) {
@@ -219,6 +233,7 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
     }
   }
 
+  @MainThread
   @Override public void cancel() {
     notifyCancel();
     removeFrameCallback();
@@ -243,14 +258,23 @@ public class LottieValueAnimator extends BaseLottieAnimator implements Choreogra
   }
 
   protected void postFrameCallback() {
-    removeFrameCallback();
-    Choreographer.getInstance().postFrameCallback(this);
-    isRunning = true;
+    if (isRunning()) {
+      removeFrameCallback(false);
+      Choreographer.getInstance().postFrameCallback(this);
+    }
   }
 
+  @MainThread
   protected void removeFrameCallback() {
+    this.removeFrameCallback(true);
+  }
+
+  @MainThread
+  protected void removeFrameCallback(boolean stopRunning) {
     Choreographer.getInstance().removeFrameCallback(this);
-    isRunning = false;
+    if (stopRunning) {
+      running = false;
+    }
   }
 
   private void verifyFrame() {

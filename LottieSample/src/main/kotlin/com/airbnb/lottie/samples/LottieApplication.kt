@@ -2,6 +2,7 @@ package com.airbnb.lottie.samples
 
 import androidx.multidex.MultiDexApplication
 import com.airbnb.lottie.L
+import com.airbnb.lottie.samples.api.LottiefilesApi
 import com.google.gson.FieldNamingPolicy
 import com.google.gson.GsonBuilder
 import okhttp3.OkHttpClient
@@ -25,16 +26,18 @@ class LottieApplication : MultiDexApplication() {
     val retrofit by lazy {
         Retrofit.Builder()
                 .client(okHttpClient)
-                .baseUrl("https://lottiefiles.frb.io/api/v1/")
+                .baseUrl("https://api.lottiefiles.com/")
                 .addConverterFactory(GsonConverterFactory.create(gson))
                 .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
                 .build()
     }
 
-    val lottiefilesService by lazy { retrofit.create(LottiefilesService::class.java) }
+    val lottiefilesService by lazy { retrofit.create(LottiefilesApi::class.java) }
 
     override fun onCreate() {
         super.onCreate()
         L.DBG = true
+        @Suppress("RestrictedApi")
+        L.setTraceEnabled(true)
     }
 }

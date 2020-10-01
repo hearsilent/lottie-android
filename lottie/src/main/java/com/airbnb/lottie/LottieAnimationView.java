@@ -16,6 +16,7 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
 
+import androidx.annotation.AttrRes;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.FloatRange;
 import androidx.annotation.MainThread;
@@ -23,6 +24,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RawRes;
 import androidx.appcompat.widget.AppCompatImageView;
+import androidx.core.view.ViewCompat;
 
 import com.airbnb.lottie.model.KeyPath;
 import com.airbnb.lottie.parser.moshi.JsonReader;
@@ -37,6 +39,7 @@ import java.io.InputStream;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
 
 import static com.airbnb.lottie.RenderMode.HARDWARE;
 
@@ -97,9 +100,13 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
   private boolean isInitialized;
   private String animationName;
   private @RawRes int animationResId;
+
+  private boolean playAnimationWhenShown = false;
   private boolean wasAnimatingWhenNotShown = false;
   private boolean wasAnimatingWhenDetached = false;
+
   private boolean autoPlay = false;
+  private boolean cacheComposition = true;
   private RenderMode renderMode = RenderMode.AUTOMATIC;
   private Set<LottieOnCompositionLoadedListener> lottieOnCompositionLoadedListeners = new HashSet<>();
   /**
@@ -117,47 +124,46 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
 
   public LottieAnimationView(Context context) {
     super(context);
-    init(null);
+    init(null, R.attr.lottieAnimationViewStyle);
   }
 
   public LottieAnimationView(Context context, AttributeSet attrs) {
     super(context, attrs);
-    init(attrs);
+    init(attrs, R.attr.lottieAnimationViewStyle);
   }
 
   public LottieAnimationView(Context context, AttributeSet attrs, int defStyleAttr) {
     super(context, attrs, defStyleAttr);
-    init(attrs);
+    init(attrs, defStyleAttr);
   }
 
-  private void init(@Nullable AttributeSet attrs) {
-    TypedArray ta = getContext().obtainStyledAttributes(attrs, R.styleable.LottieAnimationView);
-    if (!isInEditMode()) {
-      boolean hasRawRes = ta.hasValue(R.styleable.LottieAnimationView_lottie_rawRes);
-      boolean hasFileName = ta.hasValue(R.styleable.LottieAnimationView_lottie_fileName);
-      boolean hasUrl = ta.hasValue(R.styleable.LottieAnimationView_lottie_url);
-      if (hasRawRes && hasFileName) {
-        throw new IllegalArgumentException("lottie_rawRes and lottie_fileName cannot be used at " +
-            "the same time. Please use only one at once.");
-      } else if (hasRawRes) {
-        int rawResId = ta.getResourceId(R.styleable.LottieAnimationView_lottie_rawRes, 0);
-        if (rawResId != 0) {
-          setAnimation(rawResId);
-        }
-      } else if (hasFileName) {
-        String fileName = ta.getString(R.styleable.LottieAnimationView_lottie_fileName);
-        if (fileName != null) {
-          setAnimation(fileName);
-        }
-      } else if (hasUrl) {
-        String url = ta.getString(R.styleable.LottieAnimationView_lottie_url);
-        if (url != null) {
-          setAnimationFromUrl(url);
-        }
+  private void init(@Nullable AttributeSet attrs, @AttrRes int defStyleAttr) {
+    TypedArray ta = getContext().obtainStyledAttributes(attrs, R.styleable.LottieAnimationView, defStyleAttr, 0);
+    cacheComposition = ta.getBoolean(R.styleable.LottieAnimationView_lottie_cacheComposition, true);
+    boolean hasRawRes = ta.hasValue(R.styleable.LottieAnimationView_lottie_rawRes);
+    boolean hasFileName = ta.hasValue(R.styleable.LottieAnimationView_lottie_fileName);
+    boolean hasUrl = ta.hasValue(R.styleable.LottieAnimationView_lottie_url);
+    if (hasRawRes && hasFileName) {
+      throw new IllegalArgumentException("lottie_rawRes and lottie_fileName cannot be used at " +
+          "the same time. Please use only one at once.");
+    } else if (hasRawRes) {
+      int rawResId = ta.getResourceId(R.styleable.LottieAnimationView_lottie_rawRes, 0);
+      if (rawResId != 0) {
+        setAnimation(rawResId);
       }
-
-      setFallbackResource(ta.getResourceId(R.styleable.LottieAnimationView_lottie_fallbackRes, 0));
+    } else if (hasFileName) {
+      String fileName = ta.getString(R.styleable.LottieAnimationView_lottie_fileName);
+      if (fileName != null) {
+        setAnimation(fileName);
+      }
+    } else if (hasUrl) {
+      String url = ta.getString(R.styleable.LottieAnimationView_lottie_url);
+      if (url != null) {
+        setAnimationFromUrl(url);
+      }
     }
+
+    setFallbackResource(ta.getResourceId(R.styleable.LottieAnimationView_lottie_fallbackRes, 0));
     if (ta.getBoolean(R.styleable.LottieAnimationView_lottie_autoPlay, false)) {
       wasAnimatingWhenDetached = true;
       autoPlay = true;
@@ -204,6 +210,9 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
       setRenderMode(RenderMode.values()[renderModeOrdinal]);
     }
 
+    if (getScaleType() != null) {
+      lottieDrawable.setScaleType(getScaleType());
+    }
     ta.recycle();
 
     lottieDrawable.setSystemAnimationsAreEnabled(Utils.getAnimationScale(getContext()) != 0f);
@@ -244,7 +253,7 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
     ss.animationName = animationName;
     ss.animationResId = animationResId;
     ss.progress = lottieDrawable.getProgress();
-    ss.isAnimating = lottieDrawable.isAnimating();
+    ss.isAnimating = lottieDrawable.isAnimating() || (!ViewCompat.isAttachedToWindow(this) && wasAnimatingWhenDetached);
     ss.imageAssetsFolder = lottieDrawable.getImageAssetsFolder();
     ss.repeatMode = lottieDrawable.getRepeatMode();
     ss.repeatCount = lottieDrawable.getRepeatCount();
@@ -293,8 +302,11 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
     if (isShown()) {
       if (wasAnimatingWhenNotShown) {
         resumeAnimation();
-        wasAnimatingWhenNotShown = false;
+      } else if (playAnimationWhenShown) {
+        playAnimation();
       }
+      wasAnimatingWhenNotShown = false;
+      playAnimationWhenShown = false;
     } else {
       if (isAnimating()) {
         pauseAnimation();
@@ -305,7 +317,7 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
 
   @Override protected void onAttachedToWindow() {
     super.onAttachedToWindow();
-    if (autoPlay || wasAnimatingWhenDetached) {
+    if (!isInEditMode() &&( autoPlay || wasAnimatingWhenDetached)) {
       playAnimation();
       // Autoplay from xml should only apply once.
       autoPlay = false;
@@ -345,19 +357,60 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
   }
 
   /**
+   * If set to true, all future compositions that are set will be cached so that they don't need to be parsed
+   * next time they are loaded. This won't apply to compositions that have already been loaded.
+   *
+   * Defaults to true.
+   *
+   * {@link R.attr#lottie_cacheComposition}
+   */
+  public void  setCacheComposition(boolean cacheComposition) {
+    this.cacheComposition = cacheComposition;
+  }
+
+  /**
    * Sets the animation from a file in the raw directory.
    * This will load and deserialize the file asynchronously.
    */
   public void setAnimation(@RawRes final int rawRes) {
     this.animationResId = rawRes;
     animationName = null;
-    setCompositionTask(LottieCompositionFactory.fromRawRes(getContext(), rawRes));
+    setCompositionTask(fromRawRes(rawRes));
+  }
+
+
+  private LottieTask<LottieComposition> fromRawRes(@RawRes final int rawRes) {
+    if (isInEditMode()) {
+      return new LottieTask<>(new Callable<LottieResult<LottieComposition>>() {
+        @Override public LottieResult<LottieComposition> call() throws Exception {
+          return cacheComposition
+              ? LottieCompositionFactory.fromRawResSync(getContext(), rawRes) : LottieCompositionFactory.fromRawResSync(getContext(), rawRes, null);
+        }
+      }, true);
+    } else {
+      return cacheComposition ?
+          LottieCompositionFactory.fromRawRes(getContext(), rawRes) : LottieCompositionFactory.fromRawRes(getContext(), rawRes, null);
+    }
   }
 
   public void setAnimation(final String assetName) {
     this.animationName = assetName;
     animationResId = 0;
-    setCompositionTask(LottieCompositionFactory.fromAsset(getContext(), assetName));
+    setCompositionTask(fromAssets(assetName));
+  }
+
+  private LottieTask<LottieComposition> fromAssets(final String assetName) {
+    if (isInEditMode()) {
+      return new LottieTask<>(new Callable<LottieResult<LottieComposition>>() {
+        @Override public LottieResult<LottieComposition> call() throws Exception {
+          return cacheComposition ?
+              LottieCompositionFactory.fromAssetSync(getContext(), assetName) : LottieCompositionFactory.fromAssetSync(getContext(), assetName, null);
+        }
+      }, true);
+    } else {
+      return cacheComposition ?
+          LottieCompositionFactory.fromAsset(getContext(), assetName) : LottieCompositionFactory.fromAsset(getContext(), assetName, null);
+    }
   }
 
   /**
@@ -397,7 +450,22 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
    * can be accessed immediately for subsequent requests. If the file does not parse to a composition, the temporary file will be deleted.
    */
   public void setAnimationFromUrl(String url) {
-    setCompositionTask(LottieCompositionFactory.fromUrl(getContext(), url));
+    LottieTask<LottieComposition> task = cacheComposition ?
+        LottieCompositionFactory.fromUrl(getContext(), url) : LottieCompositionFactory.fromUrl(getContext(), url, null);
+    setCompositionTask(task);
+  }
+
+  /**
+   * Load a lottie animation from a url. The url can be a json file or a zip file. Use a zip file if you have images. Simply zip them together and lottie
+   * will unzip and link the images automatically.
+   *
+   * Under the hood, Lottie uses Java HttpURLConnection because it doesn't require any transitive networking dependencies. It will download the file
+   * to the application cache under a temporary name. If the file successfully parses to a composition, it will rename the temporary file to one that
+   * can be accessed immediately for subsequent requests. If the file does not parse to a composition, the temporary file will be deleted.
+   */
+  public void setAnimationFromUrl(String url, @Nullable String cacheKey) {
+    LottieTask<LottieComposition> task = LottieCompositionFactory.fromUrl(getContext(), url, cacheKey);
+    setCompositionTask(task);
   }
 
   /**
@@ -465,11 +533,6 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
       return;
     }
 
-    // If you set a different composition on the view, the bounds will not update unless
-    // the drawable is different than the original.
-    setImageDrawable(null);
-    setImageDrawable(lottieDrawable);
-
     // This is needed to makes sure that the animation is properly played/paused for the current visibility state.
     // It is possible that the drawable had a lazy composition task to play the animation but this view subsequently
     // became invisible. Comment this out and run the espresso tests to see a failing test.
@@ -511,7 +574,7 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
       lottieDrawable.playAnimation();
       enableOrDisableHardwareLayer();
     } else {
-      wasAnimatingWhenNotShown = true;
+      playAnimationWhenShown = true;
     }
   }
 
@@ -525,6 +588,7 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
       lottieDrawable.resumeAnimation();
       enableOrDisableHardwareLayer();
     } else {
+      playAnimationWhenShown = false;
       wasAnimatingWhenNotShown = true;
     }
   }
@@ -594,6 +658,18 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
    */
   public void setMinAndMaxFrame(String markerName) {
     lottieDrawable.setMinAndMaxFrame(markerName);
+  }
+
+  /**
+   * Sets the minimum and maximum frame to the start marker start and the maximum frame to the end marker start.
+   * playEndMarkerStartFrame determines whether or not to play the frame that the end marker is on. If the end marker
+   * represents the end of the section that you want, it should be true. If the marker represents the beginning of the
+   * next section, it should be false.
+   *
+   * @throws IllegalArgumentException if either marker is not found.
+   */
+  public void setMinAndMaxFrame(final String startMarkerName, final String endMarkerName, final boolean playEndMarkerStartFrame) {
+    lottieDrawable.setMinAndMaxFrame(startMarkerName, endMarkerName, playEndMarkerStartFrame);
   }
 
   /**
@@ -842,9 +918,18 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
     return lottieDrawable.getScale();
   }
 
+  @Override public void setScaleType(ScaleType scaleType) {
+    super.setScaleType(scaleType);
+    if (lottieDrawable != null) {
+      lottieDrawable.setScaleType(scaleType);
+    }
+  }
+
   @MainThread
   public void cancelAnimation() {
+    wasAnimatingWhenDetached = false;
     wasAnimatingWhenNotShown = false;
+    playAnimationWhenShown = false;
     lottieDrawable.cancelAnimation();
     enableOrDisableHardwareLayer();
   }
@@ -854,6 +939,7 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
     autoPlay = false;
     wasAnimatingWhenDetached = false;
     wasAnimatingWhenNotShown = false;
+    playAnimationWhenShown = false;
     lottieDrawable.pauseAnimation();
     enableOrDisableHardwareLayer();
   }
@@ -898,6 +984,21 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
   private void clearComposition() {
     composition = null;
     lottieDrawable.clearComposition();
+  }
+
+  /**
+   * If you are experiencing a device specific crash that happens during drawing, you can set this to true
+   * for those devices. If set to true, draw will be wrapped with a try/catch which will cause Lottie to
+   * render an empty frame rather than crash your app.
+   *
+   * Ideally, you will never need this and the vast majority of apps and animations won't. However, you may use
+   * this for very specific cases if absolutely necessary.
+   *
+   * There is no XML attr for this because it should be set programmatically and only for specific devices that
+   * are known to be problematic.
+   */
+  public void setSafeMode(boolean safeMode) {
+    lottieDrawable.setSafeMode(safeMode);
   }
 
   /**
@@ -955,6 +1056,21 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
     lottieDrawable.setApplyingOpacityToLayersEnabled(isApplyingOpacityToLayersEnabled);
   }
 
+  /**
+   * Disable the extraScale mode in {@link #draw(Canvas)} function when scaleType is FitXY. It doesn't affect the rendering with other scaleTypes.
+   *
+   * <p>When there are 2 animation layout side by side, the default extra scale mode might leave 1 pixel not drawn between 2 animation, and
+   * disabling the extraScale mode can fix this problem</p>
+   *
+   * <b>Attention:</b> Disable the extra scale mode can downgrade the performance and may lead to larger memory footprint. Please only disable this
+   * mode when using animation with a reasonable dimension (smaller than screen size).
+   *
+   * @see LottieDrawable#drawWithNewAspectRatio(Canvas)
+   */
+  public void disableExtraScaleModeInFitXY() {
+    lottieDrawable.disableExtraScaleModeInFitXY();
+  }
+
   private void enableOrDisableHardwareLayer() {
     int layerType = LAYER_TYPE_SOFTWARE;
     switch (renderMode) {
@@ -971,6 +1087,8 @@ import static com.airbnb.lottie.RenderMode.HARDWARE;
         } else if (composition != null && composition.getMaskAndMatteCount() > 4) {
           useHardwareLayer = false;
         } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+          useHardwareLayer = false;
+        } else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.N || Build.VERSION.SDK_INT == Build.VERSION_CODES.N_MR1) {
           useHardwareLayer = false;
         }
         layerType = useHardwareLayer ? LAYER_TYPE_HARDWARE : LAYER_TYPE_SOFTWARE;

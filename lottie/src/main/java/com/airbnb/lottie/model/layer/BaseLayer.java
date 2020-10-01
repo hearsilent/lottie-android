@@ -81,6 +81,8 @@ public abstract class BaseLayer
   @Nullable
   private MaskKeyframeAnimation mask;
   @Nullable
+  private FloatKeyframeAnimation inOutAnimation;
+  @Nullable
   private BaseLayer matteLayer;
   /**
    * This should only be used by {@link #buildParentLayerListIfNeeded()}
@@ -145,8 +147,7 @@ public abstract class BaseLayer
 
   private void setupInOutAnimations() {
     if (!layerModel.getInOutKeyframes().isEmpty()) {
-      final FloatKeyframeAnimation inOutAnimation =
-          new FloatKeyframeAnimation(layerModel.getInOutKeyframes());
+      inOutAnimation = new FloatKeyframeAnimation(layerModel.getInOutKeyframes());
       inOutAnimation.setIsDiscrete();
       inOutAnimation.addUpdateListener(new BaseKeyframeAnimation.AnimationListener() {
         @Override
@@ -247,6 +248,7 @@ public abstract class BaseLayer
 
     if (!rect.isEmpty()) {
       L.beginSection("Layer#saveLayer");
+      contentPaint.setAlpha(255);
       Utils.saveLayerCompat(canvas, rect, contentPaint);
       L.endSection("Layer#saveLayer");
 
@@ -310,6 +312,9 @@ public abstract class BaseLayer
       path.transform(matrix);
 
       switch (mask.getMaskMode()) {
+        case MASK_MODE_NONE:
+          // Mask mode none will just render the original content so it is the whole bounds.
+          return;
         case MASK_MODE_SUBTRACT:
           // If there is a subtract mask, the mask could potentially be the size of the entire
           // canvas so we can't use the mask bounds.
@@ -370,7 +375,7 @@ public abstract class BaseLayer
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
       // Pre-Pie, offscreen buffers were opaque which meant that outer border of a mask
       // might get drawn depending on the result of float rounding.
-      canvas.drawColor(Color.TRANSPARENT);
+      clearCanvas(canvas);
     }
     L.endSection("Layer#saveLayer");
     for (int i = 0; i < mask.getMasks().size(); i++) {
@@ -378,6 +383,16 @@ public abstract class BaseLayer
       BaseKeyframeAnimation<ShapeData, Path> maskAnimation = this.mask.getMaskAnimations().get(i);
       BaseKeyframeAnimation<Integer, Integer> opacityAnimation = this.mask.getOpacityAnimations().get(i);
       switch (mask.getMaskMode()) {
+        case MASK_MODE_NONE:
+          // None mask should have no effect. If all masks are NONE, fill the
+          // mask canvas with a rectangle so it fully covers the original layer content.
+          // However, if there are other masks, they should be the only ones that have an effect so
+          // this should noop.
+          if (areAllMasksNone()) {
+            contentPaint.setAlpha(255);
+            canvas.drawRect(rect, contentPaint);
+          }
+          break;
         case MASK_MODE_ADD:
           if (mask.isInverted()) {
             applyInvertedAddMask(canvas, matrix, mask, maskAnimation, opacityAnimation);
@@ -409,6 +424,19 @@ public abstract class BaseLayer
     L.beginSection("Layer#restoreLayer");
     canvas.restore();
     L.endSection("Layer#restoreLayer");
+  }
+
+  private boolean areAllMasksNone() {
+    if (mask.getMaskAnimations().isEmpty()) {
+      return false;
+    }
+    boolean areAllMasksNone = true;
+    for (int i = 0; i < mask.getMasks().size(); i++) {
+      if (mask.getMasks().get(i).getMaskMode() != Mask.MaskMode.MASK_MODE_NONE) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private void applyAddMask(Canvas canvas, Matrix matrix, Mask mask,
@@ -496,6 +524,10 @@ public abstract class BaseLayer
     }
     if (layerModel.getTimeStretch() != 0) {
       progress /= layerModel.getTimeStretch();
+    }
+    if (inOutAnimation != null) {
+      // Time stretch needs to be divided again for the inOutAnimation.
+      inOutAnimation.setProgress(progress / layerModel.getTimeStretch());
     }
     if (matteLayer != null) {
       // The matte layer's time stretch is pre-calculated.

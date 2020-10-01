@@ -3,15 +3,15 @@ package com.airbnb.lottie.samples
 import android.animation.ValueAnimator
 import android.app.Application
 import android.net.Uri
-import androidx.fragment.app.FragmentActivity
 import com.airbnb.lottie.LottieComposition
 import com.airbnb.lottie.LottieCompositionFactory
 import com.airbnb.lottie.LottieTask
-import com.airbnb.lottie.model.LottieCompositionCache
 import com.airbnb.lottie.samples.model.CompositionArgs
+import com.airbnb.lottie.samples.utils.MvRxViewModel
 import com.airbnb.mvrx.*
 import java.io.FileInputStream
-import java.io.FileNotFoundException
+import kotlin.math.max
+import kotlin.math.min
 
 data class PlayerState(
         val composition: Async<LottieComposition> = Uninitialized,
@@ -23,7 +23,6 @@ data class PlayerState(
         val scaleVisible: Boolean = false,
         val speedVisible: Boolean = false,
         val trimVisible: Boolean = false,
-        val useHardwareAcceleration: Boolean = false,
         val useMergePaths: Boolean = false,
         val minFrame: Int = 0,
         val maxFrame: Int = 0,
@@ -37,13 +36,13 @@ class PlayerViewModel(
 ) : MvRxViewModel<PlayerState>(initialState) {
 
     fun fetchAnimation(args: CompositionArgs) {
-        val url = args.url ?: args.animationData?.lottieLink
+        val url = args.url ?: args.animationDataV2?.file ?: args.animationData?.lottieLink
 
         when {
-            url != null -> LottieCompositionFactory.fromUrl(application, url)
+            url != null -> LottieCompositionFactory.fromUrl(application, url, null)
             args.fileUri != null -> taskForUri(args.fileUri)
-            args.asset != null -> LottieCompositionFactory.fromAsset(application, args.asset)
-            else -> throw IllegalArgumentException("Don't know how to fetch animation for $args")
+            args.asset != null -> LottieCompositionFactory.fromAsset(application, args.asset, null)
+            else -> error("Don't know how to fetch animation for $args")
         }
                 .addListener {
                     setState {
@@ -54,17 +53,13 @@ class PlayerViewModel(
     }
 
     private fun taskForUri(uri: Uri): LottieTask<LottieComposition> {
-        val fis = try {
-            when (uri.scheme) {
-                "file" -> FileInputStream(uri.path)
-                "content" -> application.contentResolver.openInputStream(uri)
-                else -> return LottieTask() { throw IllegalArgumentException("Unknown scheme ${uri.scheme}") }
-            }
-        } catch (e: FileNotFoundException) {
-            return LottieTask { throw e }
+        val fis = when (uri.scheme) {
+            "file" -> FileInputStream(uri.path ?: error("File has no path!"))
+            "content" -> application.contentResolver.openInputStream(uri)
+            else -> error("Unknown scheme ${uri.scheme}")
         }
 
-        return LottieCompositionFactory.fromJsonInputStream(fis, uri.toString())
+        return LottieCompositionFactory.fromJsonInputStream(fis, null)
     }
 
     fun toggleRenderGraphVisible() = setState { copy(renderGraphVisible = !renderGraphVisible) }
@@ -87,16 +82,14 @@ class PlayerViewModel(
 
     fun setTrimVisible(visible: Boolean) = setState { copy(trimVisible = visible) }
 
-    fun toggleHardwareAcceleration() = setState { copy(useHardwareAcceleration = !useHardwareAcceleration) }
-
     fun toggleMergePaths() = setState { copy(useMergePaths = !useMergePaths) }
 
     fun setMinFrame(minFrame: Int) = setState {
-        copy(minFrame = Math.max(minFrame, composition()?.startFrame?.toInt() ?: 0))
+        copy(minFrame = max(minFrame, composition()?.startFrame?.toInt() ?: 0))
     }
 
     fun setMaxFrame(maxFrame: Int) = setState {
-        copy(maxFrame = Math.min(maxFrame, composition()?.endFrame?.toInt() ?: 0))
+        copy(maxFrame = min(maxFrame, composition()?.endFrame?.toInt() ?: 0))
     }
 
     fun setSpeed(speed: Float) = setState { copy(speed = speed) }
@@ -116,8 +109,9 @@ class PlayerViewModel(
         )
     }
 
-    companion object : MvRxViewModelFactory<PlayerState> {
-        @JvmStatic
-        override fun create(activity: FragmentActivity, state: PlayerState) = PlayerViewModel(state, activity.application)
+    companion object : MvRxViewModelFactory<PlayerViewModel, PlayerState> {
+        override fun create(viewModelContext: ViewModelContext, state: PlayerState): PlayerViewModel? {
+            return PlayerViewModel(state, viewModelContext.app())
+        }
     }
 }
